@@ -412,6 +412,7 @@ macro( orocos_typegen_headers )
   MESSAGE( "[UseOrocos] Generating typekit for ${PROJECT_NAME} ${ORO_TYPEGEN_HEADERS_DEP_INFO_MSG}..." )
   
   # Works in top level source dir:
+  set(TYPEGEN_EXE typegen-NOTFOUND) #re-check for typegen each time !
   find_program(TYPEGEN_EXE typegen)
   if (NOT TYPEGEN_EXE)
     message(FATAL_ERROR "'typegen' not found in path. Can't build typekit. Did you 'source env.sh' ?")
@@ -424,7 +425,6 @@ macro( orocos_typegen_headers )
     execute_process( COMMAND ${TYPEGEN_EXE} --output ${PROJECT_SOURCE_DIR}/typekit ${PROJECT_NAME} ${ORO_TYPEGEN_HEADERS_IMPORTS} ${ORO_TYPEGEN_HEADERS_DEFAULT_ARGS} 
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} 
       )
-
     # work around generated manifest.xml file:
     execute_process( COMMAND ${CMAKE_COMMAND} -E remove -f ${PROJECT_SOURCE_DIR}/typekit/manifest.xml )
     add_subdirectory( ${PROJECT_SOURCE_DIR}/typekit ${PROJECT_BINARY_DIR}/typekit)
