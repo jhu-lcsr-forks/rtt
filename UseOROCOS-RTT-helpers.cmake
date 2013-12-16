@@ -298,13 +298,15 @@ macro( orocos_use_package PACKAGE )
       # Get the package and dependency build flags
       orocos_find_package(${PACKAGE} ${ARGN})
 
-      if(${PACKAGE}_FOUND)
-        message(STATUS "[UseOrocos] Found package '${PACKAGE}'.")
+      if(ORO_${PACKAGE}_FOUND)
+        message(STATUS "[UseOrocos] Found orocos package '${PACKAGE}'.")
+      elseif(${PACKAGE}_FOUND AND NOT ORO_USE_OROCOS_ONLY)
+        message(STATUS "[UseOrocos] Found non-orocos package '${PACKAGE}'.")
       endif()
     endif()
 
     # Make sure orocos found it, instead of someone else
-    if(ORO_${PACKAGE}_FOUND)
+    if(ORO_${PACKAGE}_FOUND OR (${PACKAGE}_FOUND AND NOT ORO_USE_OROCOS_ONLY))
 
       if("$ENV{VERBOSE}" OR ${ORO_USE_VERBOSE})
         message(STATUS "[UseOrocos] Package '${PACKAGE}' exports the following variables to USE_OROCOS:")
