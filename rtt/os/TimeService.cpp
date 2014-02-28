@@ -18,6 +18,7 @@
 
 #include "os/fosi.h"
 #include "TimeService.hpp"
+#include <stdexcept>
 
 namespace RTT {
     using namespace os;
@@ -51,6 +52,7 @@ namespace RTT {
 
     bool TimeService::Release()
     {
+      throw std::runtime_error("fffffuuuuu");
         if ( _instance != 0 )
         {
             delete _instance;
@@ -92,6 +94,10 @@ namespace RTT {
             }
     }
 
+    bool TimeService::systemClockEnabled() const
+    {
+      return use_clock;
+    }
 
     TimeService::ticks
     TimeService::getTicks() const
@@ -134,6 +140,13 @@ namespace RTT {
     {
         offset += nsecs2ticks( Seconds_to_nsecs( delta ) );
         return nsecs_to_Seconds( ticks2nsecs( ticksSince( 0 ) ) ) ;
+    }
+
+    TimeService::ticks
+    TimeService::ticksChange( TimeService::ticks delta )
+    {
+        offset += delta;
+        return ticksSince( 0 );
     }
 
     TimeService::nsecs
