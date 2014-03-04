@@ -52,7 +52,6 @@ namespace RTT {
 
     bool TimeService::Release()
     {
-      throw std::runtime_error("fffffuuuuu");
         if ( _instance != 0 )
         {
             delete _instance;
