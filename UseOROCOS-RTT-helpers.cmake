@@ -1,3 +1,4 @@
+cmake_minimum_required(VERSION 2.8.3)
 
 #
 # Parses arguments or options
@@ -58,13 +59,17 @@ ENDMACRO(ORO_PARSE_ARGUMENTS)
 #
 function( orocos_get_manifest_deps RESULT)
   if ( NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/manifest.xml )
-    message("[orocos_get_manifest_deps] Note: this package has no manifest.xml file. No dependencies can be auto-configured.")
+    message(STATUS "[orocos_get_manifest_deps] Note: this package has no manifest.xml file. No dependencies can be auto-configured.")
     return()
   endif ( NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/manifest.xml )
 
   find_program(XPATH_EXE xpath )
   if (NOT XPATH_EXE)
-    message("[orocos_get_manifest_deps] Warning: xpath not found. Can't read dependencies in manifest.xml file.")
+    if (ORO_USE_ROSBUILD OR ORO_USE_CATKIN)
+      message(SEND_ERROR "[orocos_get_manifest_deps] xpath not found. Can't read dependencies in manifest.xml or package.xml file.")
+    else ()
+      message(WARNING "[orocos_get_manifest_deps] xpath not found. Can't read dependencies in manifest.xml file.")
+    endif ()
   else(NOT XPATH_EXE)
     IF (APPLE)
       execute_process(COMMAND ${XPATH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/manifest.xml "package/depend/@package" RESULT_VARIABLE RES OUTPUT_VARIABLE DEPS)
@@ -107,20 +112,22 @@ function( orocos_get_catkin_deps RESULT)
   else(NOT XPATH_EXE)
     IF (APPLE)
       execute_process(COMMAND ${XPATH_EXE} ${_PACKAGE_XML_PATH} "package/build_depend/text()" RESULT_VARIABLE RES OUTPUT_VARIABLE DEPS)
-      #SET(REGEX_STR " package=\"([^\"]+)\"")
     ELSE (APPLE)
       execute_process(COMMAND ${XPATH_EXE} -q -e "package/build_depend/text()" ${_PACKAGE_XML_PATH} RESULT_VARIABLE RES OUTPUT_VARIABLE DEPS)
-      #SET(REGEX_STR " package=\"([^\"]+)\"\n")
     ENDIF (APPLE)
+
     if (NOT RES EQUAL 0)
       message(SEND_ERROR "Error: xpath found but returned non-zero:${DEPS}")
     endif (NOT RES EQUAL 0)
 
-    string(REPLACE "\n" ";" DEPS ${DEPS})
+    if(DEPS)
+      string(REPLACE "\n" ";" DEPS ${DEPS})
+    endif()
 
-    message("[orocos_get_catkin_deps] Deps from ${_PACKAGE_XML_PATH} are: '${DEPS}'")
+    if("$ENV{VERBOSE}")
+      message(STATUS "[UseOrocos] Deps from Catkin package ${_PACKAGE_XML_PATH} are: '${DEPS}'")
+    endif()
     set(${RESULT} ${DEPS} PARENT_SCOPE)
-    #message("Dependencies are: '${${RESULT}}'")
   endif (NOT XPATH_EXE)
 
 endfunction( orocos_get_catkin_deps RESULT)
@@ -139,21 +146,17 @@ endfunction( orocos_get_catkin_deps RESULT)
 #   ${PACKAGE}_CFLAGS_OTHER     The compile flags other than -I for this package.
 #   ${PACKAGE}_LDFLAGS_OTHER    The linker flags other than -L and -l for thfully resolved link libraries for this package.
 #   ${PACKAGE}_<LIB>_LIBRARY    Each fully resolved link library <LIB> in the above list.
-#   
-# It will also aggregate the following variables for all packages found in this
-# scope:
-#   USE_OROCOS_LIBRARIES
-#   USE_OROCOS_INCLUDE_DIRS
-#   USE_OROCOS_LIBRARY_DIRS
-#   USE_OROCOS_CFLAGS_OTHER
-#   USE_OROCOS_LDFLAGS_OTHER
-#  
-#   USE_OROCOS_COMPILE_FLAGS    All exported compile flags from packages within the current scope.
-#   USE_OROCOS_LINK_FLAGS       All exported link flags from packages within the current scope.
 # 
-# Usage: orocos__package( myrobot )
+# Usage: orocos_find_package( pkg-name [OROCOS_ONLY] [REQUIRED] [VERBOSE]")
 #
 macro( orocos_find_package PACKAGE )
+
+  oro_parse_arguments(ORO_FIND
+    ""
+    "OROCOS_ONLY;REQUIRED;VERBOSE"
+    ${ARGN}
+    )
+
   if ( "${PACKAGE}" STREQUAL "rtt")
   else()
     # Try to use rosbuild to find PACKAGE
@@ -182,11 +185,19 @@ macro( orocos_find_package PACKAGE )
     endif()
 
     # Now we are ready to get the flags from the .pc files:
-    #pkg_check_modules(${PACKAGE}_COMP ${PACKAGE}-${OROCOS_TARGET})
-    pkg_search_module(${PACKAGE}_COMP_${OROCOS_TARGET} ${PACKAGE}-${OROCOS_TARGET} ${PACKAGE})
+    set(MODULE_NAMES ${PACKAGE}-${OROCOS_TARGET})
+    if(NOT ORO_FIND_OROCOS_ONLY)
+      list(APPEND MODULE_NAMES ${PACKAGE})
+    endif()
+
+    # Disable caching in FindPkgConfig.cmake as otherwise changes in
+    # Orocos .pc files are not detected before the cmake cache is deleted
+    set(${PACKAGE}_COMP_${OROCOS_TARGET}_FOUND FALSE)
+
+    pkg_search_module(${PACKAGE}_COMP_${OROCOS_TARGET} ${MODULE_NAMES})
     if (${PACKAGE}_COMP_${OROCOS_TARGET}_FOUND)
       # Use find_libraries to find each library:
-      unset(${PACKAGE}_LIBRARIES CACHE)
+      unset(${PACKAGE}_LIBRARIES)
       foreach(COMP_LIB ${${PACKAGE}_COMP_${OROCOS_TARGET}_LIBRARIES})
         # Two options: COMP_LIB is an absolute path-to-lib (must start with ':') or just a libname:
         if ( ${COMP_LIB} MATCHES "^:(.+)" OR EXISTS ${COMP_LIB})
@@ -209,33 +220,27 @@ macro( orocos_find_package PACKAGE )
         list(APPEND ${PACKAGE}_LIBRARIES "${${PACKAGE}_${COMP_LIB}_LIBRARY}")
       endforeach(COMP_LIB ${${PACKAGE}_COMP_${OROCOS_TARGET}_LIBRARIES})
 
-      # Add some output variables to the cache to make them accessible from outside this scope
-      set(${PACKAGE}_FOUND "${${PACKAGE}_COMP_${OROCOS_TARGET}_FOUND}" CACHE INTERNAL "")
-      set(${PACKAGE}_INCLUDE_DIRS "${${PACKAGE}_COMP_${OROCOS_TARGET}_INCLUDE_DIRS}" CACHE INTERNAL "")
-      set(${PACKAGE}_LIBRARY_DIRS "${${PACKAGE}_COMP_${OROCOS_TARGET}_LIBRARY_DIRS}" CACHE INTERNAL "")
-      set(${PACKAGE}_LIBRARIES "${${PACKAGE}_LIBRARIES}" CACHE INTERNAL "")
+      # Add some output variables (note these are accessible outside of this scope since this is a macro)
+      # We don't want to cache these
+      set(ORO_${PACKAGE}_FOUND "${${PACKAGE}_COMP_${OROCOS_TARGET}_FOUND}")
+      set(${PACKAGE}_FOUND ${ORO_${PACKAGE}_FOUND})
+      set(${PACKAGE}_INCLUDE_DIRS "${${PACKAGE}_COMP_${OROCOS_TARGET}_INCLUDE_DIRS}")
+      set(${PACKAGE}_LIBRARY_DIRS "${${PACKAGE}_COMP_${OROCOS_TARGET}_LIBRARY_DIRS}")
+      set(${PACKAGE}_LIBRARIES "${${PACKAGE}_LIBRARIES}")
       # The flags are space separated, so no need to quote here:
-      set(${PACKAGE}_CFLAGS_OTHER ${${PACKAGE}_COMP_${OROCOS_TARGET}_CFLAGS_OTHER} CACHE INTERNAL "")
-      set(${PACKAGE}_LDFLAGS_OTHER ${${PACKAGE}_COMP_${OROCOS_TARGET}_LDFLAGS_OTHER} CACHE INTERNAL "")
+      set(${PACKAGE}_CFLAGS_OTHER ${${PACKAGE}_COMP_${OROCOS_TARGET}_CFLAGS_OTHER})
+      set(${PACKAGE}_LDFLAGS_OTHER ${${PACKAGE}_COMP_${OROCOS_TARGET}_LDFLAGS_OTHER})
 
-      # Add compiler and linker flags to the USE_OROCOS_XXX_FLAGS variables used in the orocos_add_x macros
-      list(APPEND USE_OROCOS_COMPILE_FLAGS ${${PACKAGE}_COMP_${OROCOS_TARGET}_CFLAGS_OTHER})
-      list(APPEND USE_OROCOS_LINK_FLAGS ${${PACKAGE}_COMP_${OROCOS_TARGET}_LDFLAGS_OTHER})
-      # This probably does not work since lists are ';' separated and not ' ' separated:
-      list(REMOVE_DUPLICATES USE_OROCOS_COMPILE_FLAGS)
-      list(REMOVE_DUPLICATES USE_OROCOS_LINK_FLAGS)
-
-      # Store aggregated variables
-      list(APPEND USE_OROCOS_INCLUDE_DIRS ${${PACKAGE}_INCLUDE_DIRS})
-      list(APPEND USE_OROCOS_LIBRARIES ${${PACKAGE}_LIBRARIES})
-      list(APPEND USE_OROCOS_LIBRARY_DIRS ${${PACKAGE}_LIBRARY_DIRS})
-      list(APPEND USE_OROCOS_CFLAGS_OTHER ${${PACKAGE}_CFLAGS_OTHER})
-      list(APPEND USE_OROCOS_LDFLAGS_OTHER ${${PACKAGE}_LDFLAGS_OTHER})
-
-    else (${PACKAGE}_COMP_${OROCOS_TARGET}_FOUND)
-      message("[UseOrocos] ${PACKAGE} does not provide a .pc file for exporting its build/link flags (or one of it 'Requires' dependencies was not found).")
-    endif (${PACKAGE}_COMP_${OROCOS_TARGET}_FOUND)
-  endif()  
+    else()
+      if(ORO_FIND_REQUIRED)
+        message(FATAL_ERROR "[UseOrocos] Could not find package '${PACKAGE}'.")
+      else()
+        if(ORO_FIND_VERBOSE)
+          message(WARNING "[UseOrocos] Could not find package '${PACKAGE}'. It does not provide a .pc file for exporting its build/link flags (or one of it 'Requires' dependencies was not found).")
+        endif()
+      endif()
+    endif()
+  endif()
 endmacro( orocos_find_package PACKAGE )
 
 #
@@ -253,31 +258,110 @@ endmacro( orocos_find_package PACKAGE )
 # Internally it calls orocos_find_package(), which exports serveral variables
 # containing build flags exported by dependencies. See the
 # orocos_find_package() documentation for more details.
+#   
+# It will also aggregate the following variables for all packages found in this
+# scope:
+#   USE_OROCOS_PACKAGES
+#   USE_OROCOS_LIBRARIES
+#   USE_OROCOS_INCLUDE_DIRS
+#   USE_OROCOS_LIBRARY_DIRS
+#   USE_OROCOS_CFLAGS_OTHER
+#   USE_OROCOS_LDFLAGS_OTHER
+#  
+#   USE_OROCOS_COMPILE_FLAGS    All exported compile flags from packages within the current scope.
+#   USE_OROCOS_LINK_FLAGS       All exported link flags from packages within the current scope.
 #
-# Usage: orocos_use_package( myrobot )
+# Usage: orocos_use_package( pkg-name [OROCOS_ONLY] [REQUIRED] [VERBOSE]")
 #
 macro( orocos_use_package PACKAGE )
+
+  oro_parse_arguments(ORO_USE
+    ""
+    "OROCOS_ONLY;REQUIRED;VERBOSE"
+    ${ARGN}
+    )
+
   # Check a flag so we don't over-link
   if(NOT ${PACKAGE}_${OROCOS_TARGET}_USED)
-    # Get the package and dependency build flags
-    orocos_find_package(${PACKAGE})
+    # Check if ${PACKAGE}_EXPORTED_OROCOS_TARGETS is defined in this workspace
+    if(DEFINED ${PACKAGE}_EXPORTED_OROCOS_TARGETS OR DEFINED ${PACKAGE}-${OROCOS_TARGET}_EXPORTED_OROCOS_TARGETS)
+      message(STATUS "[UseOrocos] Found orocos package '${PACKAGE}' in the same workspace.")
 
-    if(${PACKAGE}_FOUND)
-      # Include the aggregated include directories
-      include_directories(${${PACKAGE}_INCLUDE_DIRS})
+      # The package has been generated in the same workspace. Just use the exported targets and include directories.
+      set(ORO_${PACKAGE}_FOUND True)
+      set(${PACKAGE}_FOUND True)
+      set(${PACKAGE}_INCLUDE_DIRS ${${PACKAGE}_EXPORTED_OROCOS_INCLUDE_DIRS} ${${PACKAGE}-${OROCOS_TARGET}_EXPORTED_OROCOS_INCLUDE_DIRS})
+      set(${PACKAGE}_LIBRARY_DIRS "")
+      set(${PACKAGE}_LIBRARIES ${${PACKAGE}_EXPORTED_OROCOS_TARGETS} ${${PACKAGE}-${OROCOS_TARGET}_EXPORTED_OROCOS_TARGETS})
 
-      # Only link in case there is something *and* the user didn't opt-out:
-      if(NOT OROCOS_NO_AUTO_LINKING AND ${PACKAGE}_COMP_${OROCOS_TARGET}_LIBRARIES)
-        link_libraries( ${${PACKAGE}_LIBRARIES} )
-        message("[orocos_use_package] Linking all targets with libraries from package '${PACKAGE}'. To disable this, set OROCOS_NO_AUTO_LINKING to true.")
-        #message("Linking with ${PACKAGE}: ${${PACKAGE}_LIBRARIES}")
+      list(APPEND USE_OROCOS_EXPORTED_TARGETS ${${PACKAGE}_LIBRARIES})
+    else()
+      # Get the package and dependency build flags
+      orocos_find_package(${PACKAGE} ${ARGN})
+
+      if(ORO_${PACKAGE}_FOUND)
+        message(STATUS "[UseOrocos] Found orocos package '${PACKAGE}'.")
+      elseif(${PACKAGE}_FOUND AND NOT ORO_USE_OROCOS_ONLY)
+        message(STATUS "[UseOrocos] Found non-orocos package '${PACKAGE}'.")
       endif()
     endif()
 
-    # Set a flag so we don't over-link
-    set(${PACKAGE}_${OROCOS_TARGET}_USED true)
+    # Make sure orocos found it, instead of someone else
+    if(ORO_${PACKAGE}_FOUND OR (${PACKAGE}_FOUND AND NOT ORO_USE_OROCOS_ONLY))
+
+      if("$ENV{VERBOSE}" OR ${ORO_USE_VERBOSE})
+        message(STATUS "[UseOrocos] Package '${PACKAGE}' exports the following variables to USE_OROCOS:")
+        message(STATUS "[UseOrocos]   ${PACKAGE}_FOUND: ${${PACKAGE}_FOUND}")
+        message(STATUS "[UseOrocos]   ${PACKAGE}_INCLUDE_DIRS: ${${PACKAGE}_INCLUDE_DIRS}")
+        message(STATUS "[UseOrocos]   ${PACKAGE}_LIBRARY_DIRS: ${${PACKAGE}_LIBRARY_DIRS}")
+        message(STATUS "[UseOrocos]   ${PACKAGE}_LIBRARIES: ${${PACKAGE}_LIBRARIES}")
+      endif()
+
+      # Include the aggregated include directories
+      include_directories(${${PACKAGE}_INCLUDE_DIRS})
+
+      # Set a flag so we don't over-link (Don't cache this, it should remain per project)
+      set(${PACKAGE}_${OROCOS_TARGET}_USED true)
+
+      # Store aggregated variables
+      list(APPEND USE_OROCOS_PACKAGES "${PACKAGE}")
+      list(APPEND USE_OROCOS_INCLUDE_DIRS "${${PACKAGE}_INCLUDE_DIRS}")
+      list(APPEND USE_OROCOS_LIBRARIES "${${PACKAGE}_LIBRARIES}")
+      list(APPEND USE_OROCOS_LIBRARY_DIRS "${${PACKAGE}_LIBRARY_DIRS}")
+      list(APPEND USE_OROCOS_CFLAGS_OTHER "${${PACKAGE}_CFLAGS_OTHER}")
+      list(APPEND USE_OROCOS_LDFLAGS_OTHER "${${PACKAGE}_LDFLAGS_OTHER}")
+
+      # Remove duplicates from aggregated variables
+      if(DEFINED USE_OROCOS_INCLUDE_DIRS)
+        list(REMOVE_DUPLICATES USE_OROCOS_INCLUDE_DIRS)
+      endif()
+      if(DEFINED USE_OROCOS_LIBRARIES)
+        list(REMOVE_DUPLICATES USE_OROCOS_LIBRARIES)
+      endif()
+      if(DEFINED USE_OROCOS_LIBRARY_DIRS)
+        list(REMOVE_DUPLICATES USE_OROCOS_LIBRARY_DIRS)
+      endif()
+      if(DEFINED USE_OROCOS_CFLAGS_OTHER)
+        list(REMOVE_DUPLICATES USE_OROCOS_CFLAGS_OTHER)
+      endif()
+      if(DEFINED USE_OROCOS_LDFLAGS_OTHER)
+        list(REMOVE_DUPLICATES USE_OROCOS_LDFLAGS_OTHER)
+      endif()
+      if(DEFINED USE_OROCOS_EXPORTED_TARGETS)
+        list(REMOVE_DUPLICATES USE_OROCOS_EXPORTED_TARGETS)
+      endif()
+
+      # Backwards compatibility
+      # Add compiler and linker flags to the USE_OROCOS_XXX_FLAGS variables used in the orocos_add_x macros
+      set(USE_OROCOS_COMPILE_FLAGS ${USE_OROCOS_CFLAGS_OTHER})
+      set(USE_OROCOS_LINK_FLAGS ${USE_OROCOS_LDFLAGS_OTHER})
+    endif()
+  else()
+    if("$ENV{VERBOSE}" OR ORO_USE_VERBOSE)
+      message(STATUS "[UseOrocos] Package '${PACKAGE}' is already being used.")
+    endif()
   endif()
-endmacro( orocos_use_package PACKAGE )
+endmacro()
 
 macro(_orocos_list_to_string _string _list)
     set(${_string})

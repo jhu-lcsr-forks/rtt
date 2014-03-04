@@ -16,7 +16,7 @@ ENDIF(COMMAND cmake_policy AND ${CMAKE_MAJOR_VERSION} EQUAL 2 AND ${CMAKE_MINOR_
 
 PROJECT(orocos-rtt)
 
-SET( RTT_VERSION 2.6.0 )
+SET( RTT_VERSION 2.7.0 )
 STRING( REGEX MATCHALL "[0-9]+" RTT_VERSIONS ${RTT_VERSION} )
 LIST( GET RTT_VERSIONS 0 RTT_VERSION_MAJOR)
 LIST( GET RTT_VERSIONS 1 RTT_VERSION_MINOR)
@@ -178,3 +178,9 @@ INSTALL(FILES UseOROCOS-RTT.cmake UseOROCOS-RTT-helpers.cmake config/cmake_unins
 
 # Install package.xml
 INSTALL(FILES package.xml DESTINATION share/rtt)
+
+# Install an env-hook if catkin is found
+find_package(catkin QUIET)
+if(catkin_FOUND)
+  catkin_add_env_hooks(00.rtt SHELLS sh DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/env-hooks)
+endif()

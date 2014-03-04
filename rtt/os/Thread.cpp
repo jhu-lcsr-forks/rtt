@@ -43,6 +43,7 @@
 #include "MutexLock.hpp"
 
 #include "../rtt-config.h"
+#include "../internal/CatchConfig.hpp"
 
 #ifdef OROPKG_OS_THREAD_SCOPE
 # include "../extras/dev/DigitalOutInterface.hpp"
@@ -53,16 +54,6 @@
 #define SCOPE_OFF
 #endif
 
-#ifndef ORO_EMBEDDED
-#define TRY try
-#define CATCH(a) catch(a)
-#define CATCH_ALL catch(...)
-#else
-#define TRY
-#define CATCH(a) if (false)
-#define CATCH_ALL if (false)
-#endif
-
 namespace RTT {
     namespace os
     {
@@ -70,7 +61,15 @@ namespace RTT {
 
         unsigned int Thread::default_stack_size = 0;
 
+        double Thread::lock_timeout_no_period_in_s = 1.0;
+
+        double Thread::lock_timeout_period_factor = 10.0;
+
         void Thread::setStackSize(unsigned int ssize) { default_stack_size = ssize; }
+
+        void Thread::setLockTimeoutNoPeriod(double timeout_in_s) { lock_timeout_no_period_in_s = timeout_in_s; }
+       
+        void Thread::setLockTimeoutPeriodFactor(double factor) { lock_timeout_period_factor = factor; }
 
         void *thread_function(void* t)
         {
@@ -98,8 +97,7 @@ namespace RTT {
 
             while (!task->prepareForExit)
             {
-                TRY
-                {
+                TRY(
                     /**
                      * The real task starts here.
                      */
@@ -129,17 +127,17 @@ namespace RTT {
                                 MutexLock lock(task->breaker);
                                 while(task->running && !task->prepareForExit )
                                 {
-                                    try
-                                    {
+                                    TRY
+                                    (
                                         SCOPE_ON
                                         task->step(); // one cycle
                                         SCOPE_OFF
-                                    }
-                                    catch(...)
-                                    {
+                                    )
+                                    CATCH_ALL
+                                    (
                                         SCOPE_OFF
                                         throw;
-                                    }
+                                    )
 
                                     // Check changes in period
                                     if ( cur_period != task->period) {
@@ -171,8 +169,8 @@ namespace RTT {
                                     break; // break while(1) {}
                             }
                             else // non periodic:
-                            try
-                            {
+                            TRY
+                            (
                                 // this mutex guarantees that stop() waits
                                 // until loop() returns.
                                 MutexLock lock(task->breaker);
@@ -182,12 +180,12 @@ namespace RTT {
                                 task->loop();
                                 SCOPE_OFF
                                 task->inloop = false;
-                            }
-                            catch(...) {
+                            ) CATCH_ALL
+                            (
                                 SCOPE_OFF
                                 task->inloop = false;
                                 throw;
-                            }
+                            )
                         }
                     } // while(1)
                     if (overruns == task->maxOverRun)
@@ -201,8 +199,7 @@ namespace RTT {
                         log()   << " See Thread::setMaxOverrun() for info."
                                 << endlog();
                     }
-                } CATCH(std::exception const& e)
-                {
+                )CATCH(std::exception const& e,
                     SCOPE_OFF
                     task->emergencyStop();
                     Logger::In in(rtos_task_get_name(task->getTask()));
@@ -211,15 +208,15 @@ namespace RTT {
                             << endlog();
                     log(Critical) << "exception was: "
                                << e.what() << endlog();
-                } CATCH_ALL
-                {
+                ) CATCH_ALL
+                (
                     SCOPE_OFF
                     task->emergencyStop();
                     Logger::In in(rtos_task_get_name(task->getTask()));
                     log(Critical) << rtos_task_get_name(task->getTask())
                             << " caught an unknown C++ exception, stopped thread !"
                             << endlog();
-                }
+                )
             } // while (!prepareForExit)
 
             return 0;
@@ -244,6 +241,7 @@ namespace RTT {
 #ifdef OROPKG_OS_THREAD_SCOPE
         ,d(NULL)
 #endif
+                    , stopTimeout(0)
         {
             this->setup(_priority, cpu_affinity, name);
         }
@@ -401,6 +399,20 @@ namespace RTT {
             }
         }
 
+        void Thread::setStopTimeout(Seconds value)
+        {
+            stopTimeout = value;
+        }
+
+        Seconds Thread::getStopTimeout() const
+        {
+            if (stopTimeout != 0)
+                return stopTimeout;
+            else if (period == 0)
+                return Thread::lock_timeout_no_period_in_s;
+            else return Thread::lock_timeout_period_factor * getPeriod();
+        }
+
         bool Thread::stop()
         {
             if (!active)
@@ -419,7 +431,7 @@ namespace RTT {
                     // breakLoop was ok, wait for loop() to return.
                 }
                 // always take this lock, but after breakLoop was called !
-                MutexTimedLock lock(breaker, 1.0); // hard-coded: wait 1 second.
+                MutexTimedLock lock(breaker, getStopTimeout()); 
                 if ( !lock.isSuccessful() ) {
                     log(Error) << "Failed to stop thread " << this->getName() << ": breakLoop() returned true, but loop() function did not return after 1 second."<<endlog();
                     running = true;
@@ -427,7 +439,7 @@ namespace RTT {
                 }
             } else {
                 //
-                MutexTimedLock lock(breaker, 10*getPeriod() ); // hard-coded: wait 5 times the period
+                MutexTimedLock lock(breaker, getStopTimeout() ); 
                 if ( lock.isSuccessful() ) {
                     // drop out of periodic mode.
                     rtos_task_make_periodic(&rtos_task, 0);
@@ -635,6 +647,7 @@ namespace RTT {
         {
             rtos_task_set_wait_period_policy(&rtos_task, p);  
         }
+
     }
 }
 

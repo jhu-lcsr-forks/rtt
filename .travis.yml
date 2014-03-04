@@ -10,7 +10,7 @@ before_install:
   - export ROS_DISTRO=hydro
   - export CI_SOURCE_PATH=$(pwd)
   # Bootstrap a minimal ROS installation
-  - git clone https://raw.github.com/jhu-lcsr/ros_ci_tools /tmp/ros_ci_tools && export PATH=/tmp/ros_ci_tools:$PATH
+  - git clone https://github.com/jhu-lcsr/ros_ci_tools /tmp/ros_ci_tools && export PATH=/tmp/ros_ci_tools:$PATH
   - ros_ci_bootstrap
   # Create isolated workspace based on the ros distro
   - source /opt/ros/$ROS_DISTRO/setup.bash
@@ -23,8 +23,8 @@ before_install:
 install:
   # Build in an isolated catkin workspace
   - export EXTRA_CMAKE_ARGS="-DENABLE_TESTS=ON -DENABLE_CORBA=ON -DCORBA_IMPLEMENTATION=OMNIORB"
-  - catkin_make_isolated --install -j1 --cmake-args $EXTRA_CMAKE_ARGS
+  - catkin_make_isolated --install -j2 --cmake-args $EXTRA_CMAKE_ARGS
 
 script:
   # Run tests
-  - pushd build_isolated/rtt && make check && popd
+  - catkin_make_isolated --install -j1 --pkg rtt --make-args check
