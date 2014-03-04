@@ -18,6 +18,7 @@
 
 #include "os/fosi.h"
 #include "TimeService.hpp"
+#include <stdexcept>
 
 namespace RTT {
     using namespace os;
@@ -51,6 +52,7 @@ namespace RTT {
 
     bool TimeService::Release()
     {
+      throw std::runtime_error("fffffuuuuu");
         if ( _instance != 0 )
         {
             delete _instance;
