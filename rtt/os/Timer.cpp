@@ -133,7 +133,9 @@ namespace RTT {
 
     Timer::~Timer()
     {
-        delete mThread;
+        if(mThread) {
+          delete mThread;
+        }
     }
 
 
